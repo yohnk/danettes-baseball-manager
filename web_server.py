@@ -94,6 +94,7 @@ if __name__ == "__main__":
         api = YahooApiManager(run=True)
         instance = WebServer(api)
         asyncio.run(instance.serve())
-    except:
+    except Exception as e:
+        logging.exception(e)
         if api is not None:
             api.kill()
