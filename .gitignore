@@ -1,0 +1,6 @@
+.DS_Store
+credentials.json
+*.log
+data
+.idea
+__pycache__
