@@ -12,7 +12,7 @@ import logging
 from yahoo_fantasy_api import League
 from yahoo_oauth import OAuth2
 import yahoo_fantasy_api as yfa
-from constants import YAHOO_API_CREDENTIALS_PATH, DATA_DIRECTORY, REFRESH_EVERY_SEC, PURGE_EVERY_SEC, LOG_DIRECTORY
+from constants import YAHOO_API_CREDENTIALS_PATH, DATA_DIRECTORY, REFRESH_EVERY_SEC, PURGE_EVERY_SEC, LOG_DIRECTORY, START_YEAR
 import pandas as pd
 
 #Setup logging
@@ -29,7 +29,6 @@ rootLogger.addHandler(fileHandler)
 consoleHandler = logging.StreamHandler()
 consoleHandler.setFormatter(logFormatter)
 rootLogger.addHandler(consoleHandler)
-
 
 class Team:
 
@@ -123,6 +122,7 @@ class YahooApiManager:
         # The first time this runs you'll need to log in through a browser to get a verification code.
         self.sc = OAuth2(consumer_key=None, consumer_secret=None, from_file=YAHOO_API_CREDENTIALS_PATH)
         self.game = yfa.Game(self.sc, 'mlb')
+        self.current_league = self._get_current_league()
         self.draft_results: List[Draft] | None = None
 
         self.draft_costs: pd.DataFrame | None = None
@@ -199,27 +199,28 @@ class YahooApiManager:
         for league_id in league_ids:
             league: League = self.game.to_league(league_id)
             season = league.settings()["season"]
-            logging.info(f"Creating artifacts for league_id: {league_id}: season {season}")
+            if START_YEAR is None or int(season) >= START_YEAR:
+                logging.info(f"Creating artifacts for league_id: {league_id}: season {season}")
 
-            teams: Dict[str, Team] = dict()
-            teams_raw: Dict[str, Dict] = league.teams()
-            for team_id in teams_raw.keys():
-                teams[team_id] = Team(yahoo_id=team_id, name=teams_raw[team_id]["name"])
+                teams: Dict[str, Team] = dict()
+                teams_raw: Dict[str, Dict] = league.teams()
+                for team_id in teams_raw.keys():
+                    teams[team_id] = Team(yahoo_id=team_id, name=teams_raw[team_id]["name"])
 
-            draft_results_raw = league.draft_results()
-            draft = Draft(season=season, yahoo_league_id=league_id)
+                draft_results_raw = league.draft_results()
+                draft = Draft(season=season, yahoo_league_id=league_id)
 
-            # Fetch all of the players at once to speed up the request
-            player_ids = [result["player_id"] for result in draft_results_raw]
-            players: Dict[str, Tuple[Player, bool]] = self.get_drafted_player(player_ids, league)
+                # Fetch all of the players at once to speed up the request
+                player_ids = [result["player_id"] for result in draft_results_raw]
+                players: Dict[str, Tuple[Player, bool]] = self.get_drafted_player(player_ids, league)
 
-            for result in draft_results_raw:
-                team: Team = teams[result["team_key"]]
-                player, kept = players[str(result["player_id"])]
-                draft.add_pick(Pick(round=result["round"], pick=result["pick"], team=team, player=player, keeper=kept))
+                for result in draft_results_raw:
+                    team: Team = teams[result["team_key"]]
+                    player, kept = players[str(result["player_id"])]
+                    draft.add_pick(Pick(round=result["round"], pick=result["pick"], team=team, player=player, keeper=kept))
 
-            draft_results.append(draft)
-            draft_results.sort(key=lambda d: d.season)
+                draft_results.append(draft)
+                draft_results.sort(key=lambda d: d.season)
 
         with open(os.path.join(run_directory, "draft-results.json"), "w", encoding='utf-8') as draft_results_file:
             json.dump([d.json() for d in draft_results], draft_results_file, indent=4, ensure_ascii=False)
@@ -236,12 +237,45 @@ class YahooApiManager:
 
         return draft_results
 
+    def _get_current_league(self, current_year: int = datetime.datetime.now().year) -> League | None:
+        league_ids = self.game.league_ids(game_codes=["mlb"])
+        for league_id in league_ids:
+            league: League = self.game.to_league(league_id)
+            season = league.settings()["season"]
+            if int(season) == current_year:
+                return league
+        return None
+
+    def _currently_rostered(self) -> Dict[int, str]:
+        output = dict()
+        if self.current_league is not None:
+            taken_player_ids = [tp["player_id"] for tp in self.current_league.taken_players()]
+            # Apparently this method only gives us 25 results max, so do 20 at a time
+            for i in range(0, len(taken_player_ids), 20):
+                player_slice = taken_player_ids[i:min(i + 20, len(taken_player_ids))]
+                ownership = self.current_league.ownership(player_ids=player_slice)
+                for player_id in ownership:
+                    output[player_id] = ownership[player_id]["owner_team_name"]
+        return output
+
+
     def calculate_draft_cost(self, run_directory: str, current_year: int = datetime.datetime.now().year) -> pd.DataFrame:
         logging.info(f"Calculating draft cost")
         players: Dict[int, str] = dict()
+        ownership: Dict[int, str] = dict()
         for draft in self.draft_results:
             for player in [pick.player for pick in draft.picks]:
                 players[player.yahoo_id] = player.name
+
+        currently_rostered = self._currently_rostered()
+        for player_id in currently_rostered:
+            if player_id not in players:
+                details = self.current_league.player_details(player=int(player_id))
+                if len(details) > 0:
+                    players[player_id] = details[0]["name"]["full"]
+            ownership[player_id] = currently_rostered[player_id]
+
+
 
         # Player Id x Year x Cost
         draft_cost: Dict[int, Dict[int, Tuple[int, bool]]] = dict()
@@ -269,10 +303,10 @@ class YahooApiManager:
                 else:
                     draft_cost[player_id][int(draft.season)] = (pick.round, False)
 
-        header_row = ["Player ID", "Player Name"] + [int(d.season) for d in self.draft_results]
+        header_row = ["ID", "Player", "Team"] + [int(d.season) for d in self.draft_results]
         rows = []
         for player_id in players.keys():
-            row = [player_id, players[player_id]]
+            row = [player_id, players[player_id], ownership[player_id] if player_id in ownership else ""]
             player_results = draft_cost[player_id]
             for season in sorted(player_results.keys()):
                 value, kept = player_results[season]

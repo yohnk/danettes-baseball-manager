@@ -39,7 +39,7 @@ class WebServer:
             settings = {
                 "ajaxURL": "/draft-cost",
                 # Use the order they are in the dataframe
-                "columns":[{"title":str(column), "field":str(column), "headerFilter": "input" if column == "Player Name" else str(False)} for column in self.yahoo_api.draft_costs.columns],
+                "columns":[{"title":str(column), "field":str(column), "headerFilter": "input" if (column == "Player" or column == "Team") else str(False)} for column in self.yahoo_api.draft_costs.columns],
                 # "autoColumns": True
                 "pagination": True,
                 "paginationMode": "local",
