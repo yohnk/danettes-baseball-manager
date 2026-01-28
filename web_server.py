@@ -30,6 +30,13 @@ class WebServer:
             """
             return HTMLResponse(f"{request.client.host}")
 
+        @app.get("/health-check", include_in_schema=False)
+        async def _get_root(request: Request):
+            """
+            Redirect to /docs
+            """
+            return HTMLResponse(f"OK")
+
         @app.get("/draft-cost", include_in_schema=False)
         async def _get_draft_cost(request: Request):
             return JSONResponse(content=self._dataframe_to_table(self.yahoo_api.draft_costs), media_type="application/json")
