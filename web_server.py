@@ -25,16 +25,11 @@ class WebServer:
 
         @app.get("/", include_in_schema=False)
         async def _get_root(request: Request):
-            """
-            Redirect to /docs
-            """
             return HTMLResponse(f"{request.client.host}")
 
         @app.get("/health-check", include_in_schema=False)
-        async def _get_root(request: Request):
-            """
-            Redirect to /docs
-            """
+        @app.head("/health-check", include_in_schema=False)
+        async def _get_health_check(request: Request):
             return HTMLResponse(f"OK")
 
         @app.get("/draft-cost", include_in_schema=False)
@@ -101,7 +96,6 @@ if __name__ == "__main__":
         api = YahooApiManager(run=True)
         instance = WebServer(api)
         asyncio.run(instance.serve())
-    except Exception as e:
-        logging.exception(e)
+    finally:
         if api is not None:
             api.kill()
